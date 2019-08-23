@@ -2,14 +2,14 @@ import pathlib
 from setuptools import setup, find_packages
 
 
-def get_requirements():
-    requirements = []
+def get_requires():
+    requires = []
     with open("requirements.txt", "r") as f:
         for line in f:
             line = line.strip()
-            if not line.startswith("#"):
-                requirements.append(line)
-    return requirements
+            if line and not line.startswith("#"):
+                requires.append(line)
+    return requires
 
 
 # The directory containing this file
@@ -30,5 +30,5 @@ setup(
     license="MIT",
     packages=find_packages(),
     include_package_data=True,
-    install_requires=get_requirements()
+    install_requires=get_requires()
 )
