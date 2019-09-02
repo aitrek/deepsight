@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 
 
-def resize(img: np.array, width: int = None, height: int = None):
+def resize(img: np.array, width: int = None, height: int = None) -> np.array:
     """
 
     Args:
