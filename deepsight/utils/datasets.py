@@ -5,8 +5,7 @@ import math
 import random
 import cv2
 from typing import Tuple
-from torch.utils.data import Dataset, DataLoader
-from torchvision.datasets.folder import DatasetFolder, default_loader
+from torch.utils.data import Dataset
 
 IMG_EXTS = [".jpe", ".jpg", ".jpeg", ".png"]
 
@@ -61,7 +60,8 @@ class GroundTruthFolder(Dataset):
 
 def train_test_split(dataset: GroundTruthFolder,
                      test_size: float,
-                     seed: int=0) -> Tuple[GroundTruthFolder, GroundTruthFolder]:
+                     seed: int = 0
+                     ) -> Tuple[GroundTruthFolder, GroundTruthFolder]:
     """
     Random split ground truth dataset into train and test subsets.
 
