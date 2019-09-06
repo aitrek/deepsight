@@ -1,6 +1,7 @@
 import os
 import re
 import copy
+import math
 import random
 import cv2
 from typing import Tuple
@@ -98,3 +99,100 @@ def train_test_split(dataset: GroundTruthFolder,
         test.gts.append(dataset.gts[i])
 
     return train, test
+
+
+class TextProposalFolder(GroundTruthFolder):
+
+    def __init__(self, data_folder: str, fixed_width: int = 16):
+        super().__init__(data_folder)
+        self._fixed_width = fixed_width
+        self._convert_gts()
+
+    def _convert_gts(self):
+        """
+        Convert object ground truth to sequential fixed-width
+        fine-scale text proposals(anchors).
+        """
+        anchors = []
+        for gt in self.gts:
+            anch = []
+            for t in gt:
+                anch += self._gt2anchors(t)
+            anchors.append(anch)
+
+        self.gts = anchors
+
+    def _gt2anchors(self, gt_pts, w=16):
+        x01, y01, x02, y02, x03, y03, x04, y04 = gt_pts
+        xmin = min(x01, x04)
+        n = math.ceil((max(x02, x03) - min(x01, x04)) / w)
+        anchors = []
+        for i in range(n):
+            x1 = x4 = math.floor(xmin + i * w)
+            x2 = x3 = x1 + w
+            y1, y4 = self._anchor_ys(gt_pts, x1)
+            y2, y3 = self._anchor_ys(gt_pts, x2)
+            y1 = y2 = math.floor(min(y1, y2))
+            y3 = y4 = math.ceil(max(y3, y4))
+            anchors.append((x1, y1, x2, y2, x3, y3, x4, y4))
+
+        return anchors
+
+    @staticmethod
+    def _line_fn(x1, y1, x2, y2):
+        a = (y1 - y2) / (x1 - x2)
+        b = (y2 * x1 - y1 * x2) / (x1 - x2)
+        return lambda x: a * x + b
+
+    def _anchor_ys(self, gt_pts, x, w=16):
+        x1, y1, x2, y2, x3, y3, x4, y4 = gt_pts
+        if x > max(x2, x3):
+            x -= w
+        if x1 < x4:
+            if x4 < x2:
+                if x <= x4:
+                    y12 = self._line_fn(x1, y1, x2, y2)(x)
+                    y34 = self._line_fn(x1, y1, x4, y4)(x)
+                elif x4 < x <= x2:
+                    y12 = self._line_fn(x1, y1, x2, y2)(x)
+                    y34 = self._line_fn(x4, y4, x3, y3)(x)
+                else:
+                    y12 = self._line_fn(x2, y2, x3, y3)(x)
+                    y34 = self._line_fn(x4, y4, x3, y3)(x)
+            else:
+                if x <= x2:
+                    y12 = self._line_fn(x1, y1, x2, y2)(x)
+                    y34 = self._line_fn(x1, y1, x4, y4)(x)
+                elif x2 < x <= x4:
+                    y12 = self._line_fn(x2, y2, x3, y3)(x)
+                    y34 = self._line_fn(x1, y1, x4, y4)(x)
+                else:
+                    y12 = self._line_fn(x2, y2, x3, y3)(x)
+                    y34 = self._line_fn(x4, y4, x3, y3)(x)
+
+        elif x1 > x4:
+            if x1 < x3:
+                if x <= x1:
+                    y12 = self._line_fn(x4, y4, x1, y1)(x)
+                    y34 = self._line_fn(x4, y4, x3, y3)(x)
+                elif x1 < x <= x3:
+                    y12 = self._line_fn(x1, y1, x2, y2)(x)
+                    y34 = self._line_fn(x4, y4, x3, y3)(x)
+                else:
+                    y12 = self._line_fn(x1, y1, x2, y2)(x)
+                    y34 = self._line_fn(x3, y3, x2, y2)(x)
+            else:
+                if x <= x3:
+                    y12 = self._line_fn(x4, y4, x1, y1)(x)
+                    y34 = self._line_fn(x4, y4, x3, y3)(x)
+                elif x3 < x <= x1:
+                    y12 = self._line_fn(x4, y4, x1, y1)(x)
+                    y34 = self._line_fn(x3, y3, x2, y2)(x)
+                else:
+                    y12 = self._line_fn(x1, y1, x2, y2)(x)
+                    y34 = self._line_fn(x3, y3, x2, y2)(x)
+        else:
+            y12 = y1
+            y34 = y4
+
+        return y12, y34
