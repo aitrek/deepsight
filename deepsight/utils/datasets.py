@@ -10,12 +10,21 @@ from torch.utils.data import Dataset
 IMG_EXTS = [".jpe", ".jpg", ".jpeg", ".png"]
 
 
+class DataList(list):
+    pass
+
+
 class GroundTruthFolder(Dataset):
     """A image with ground truth data loader. The images and ground truth
     files should be arranged in this way:
     root/xxx.jpg
     root/xxx.jpg.gt
     ...
+    The image will be ignored if the corresponding .gt file not exist or
+    no coordinate data in the file.
+
+    To support train_test_split(), the dataset attributes which will be split
+    must be type of DataList.
 
     Args:
         root (str): Root directory path.
@@ -24,8 +33,8 @@ class GroundTruthFolder(Dataset):
 
     def __init__(self, root: str):
         self._root = root
-        self.img_paths = []
-        self.gts = []
+        self.img_paths = DataList()
+        self.gts = DataList()
         self._load_data(self._root)
 
     def __getitem__(self, index: int):
@@ -44,18 +53,21 @@ class GroundTruthFolder(Dataset):
                 self._load_data(path)
             else:
                 if f.lower().split(".")[-1] in IMG_EXTS:
-                    self.img_paths.append(path)
-                    self.gts.append(self._get_gt(path + ".gt"))
+                    gts = self._get_gts(path + ".gt")
+                    if gts:
+                        self.img_paths.append(path)
+                        self.gts.append(gts)
 
     @staticmethod
-    def _get_gt(gt_path: str):
-        gt = []
+    def _get_gts(gt_path: str):
+        gts = []
         try:
             with open(gt_path) as gt_file:
                 for line in gt_file:
-                    gt.append((int(t) for t in re.split("\s+", line.strip())))
+                    gts.append((int(t) for t in re.split("\s+", line.strip())))
         except FileNotFoundError:
-            return []
+            pass
+        return gts
 
 
 def train_test_split(dataset: GroundTruthFolder,
@@ -63,23 +75,19 @@ def train_test_split(dataset: GroundTruthFolder,
                      seed: int = 0
                      ) -> Tuple[GroundTruthFolder, GroundTruthFolder]:
     """
-    Random split ground truth dataset into train and test subsets.
+    Random split ground truth dataset into train_dataset and test_dataset subsets.
 
     Args:
         dataset (GroundTruthFolder): The dataset to be split.
         test_size (float): The proportion of the dataset to include in
-            the test split.
+            the test_dataset split.
         seed (int): pseudo-random number
 
     Returns:
-        Tuple of train dataset and test dataset.
+        Tuple of train_dataset dataset and test_dataset dataset.
     """
-    train = copy.copy(dataset)
-    train.img_paths = []
-    train.gts = []
-    test = copy.copy(dataset)
-    test.img_paths = []
-    test.gts = []
+    train_dataset = copy.copy(dataset)
+    test_dataset = copy.copy(dataset)
 
     l_all = len(dataset)
     l_test = int(l_all * test_size)
@@ -90,23 +98,38 @@ def train_test_split(dataset: GroundTruthFolder,
     idx_train = idx[:l_train]
     idx_test = idx[l_train:]
 
-    for i in idx_train:
-        train.img_paths.append(dataset.img_paths[i])
-        train.gts.append(dataset.gts[i])
+    for d in dir(dataset):
+        attr = getattr(dataset, d)
+        if isinstance(attr, DataList):
 
-    for i in idx_test:
-        test.img_paths.append(dataset.img_paths[i])
-        test.gts.append(dataset.gts[i])
+            setattr(train_dataset, d, DataList())
+            setattr(test_dataset, d, DataList())
 
-    return train, test
+            for i in idx_train:
+                getattr(train_dataset, d).append(getattr(dataset, d)[i])
+
+            for i in idx_test:
+                getattr(test_dataset, d).append(getattr(dataset, d)[i])
+
+    return train_dataset, test_dataset
 
 
 class TextProposalFolder(GroundTruthFolder):
+    """Dataset for CTPN text proposals.
 
-    def __init__(self, data_folder: str, fixed_width: int = 16):
-        super().__init__(data_folder)
+    Args:
+        root (str): Root directory path of the dataset.
+        fixed_width (int): The fixed width of the text proposal.
+        memorize (bool): Memorize to cache the anchors. Make sure there is
+            enough memory, especially when you have a very large dataset.
+    """
+
+    def __init__(self, root: str, fixed_width: int = 16,
+                 memorize: bool = True):
+        super().__init__(root)
         self._fixed_width = fixed_width
         self._convert_gts()
+        self._memorize = memorize
 
     def _convert_gts(self):
         """
