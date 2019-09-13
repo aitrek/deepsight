@@ -4,8 +4,9 @@ import copy
 import math
 import random
 import cv2
-from typing import Tuple
+from typing import Tuple, List
 from torch.utils.data import Dataset
+from functools import lru_cache
 
 IMG_EXTS = [".jpe", ".jpg", ".jpeg", ".png"]
 
@@ -39,8 +40,8 @@ class GroundTruthFolder(Dataset):
 
     def __getitem__(self, index: int):
         img = cv2.imread(self.img_paths[index])
-        gt = self.gts[index]
-        return img, gt
+        boxes = self.gts[index]
+        return img, boxes
 
     def __len__(self):
         return len(self.img_paths)
@@ -53,27 +54,25 @@ class GroundTruthFolder(Dataset):
                 self._load_data(path)
             else:
                 if f.lower().split(".")[-1] in IMG_EXTS:
-                    gts = self._get_gts(path + ".gt")
-                    if gts:
+                    boxes = self._get_boxes(path + ".gt")
+                    if boxes:
                         self.img_paths.append(path)
-                        self.gts.append(gts)
+                        self.gts.append(boxes)
 
     @staticmethod
-    def _get_gts(gt_path: str):
-        gts = []
+    def _get_boxes(gt_path: str):
+        boxes = []
         try:
             with open(gt_path) as gt_file:
                 for line in gt_file:
-                    gts.append((int(t) for t in re.split("\s+", line.strip())))
+                    boxes.append((int(t) for t in re.split("\s+", line.strip())))
         except FileNotFoundError:
             pass
-        return gts
+        return boxes
 
 
-def train_test_split(dataset: GroundTruthFolder,
-                     test_size: float,
-                     seed: int = 0
-                     ) -> Tuple[GroundTruthFolder, GroundTruthFolder]:
+def train_test_split(dataset: GroundTruthFolder, test_size: float,
+                     seed: int = 0) -> Tuple[GroundTruthFolder, GroundTruthFolder]:
     """
     Random split ground truth dataset into train_dataset and test_dataset subsets.
 
@@ -114,47 +113,124 @@ def train_test_split(dataset: GroundTruthFolder,
     return train_dataset, test_dataset
 
 
-class TextProposalFolder(GroundTruthFolder):
-    """Dataset for CTPN text proposals.
+class CTPNFolder(GroundTruthFolder):
+    """CTPN dataset
 
     Args:
         root (str): Root directory path of the dataset.
         fixed_width (int): The fixed width of the text proposal.
-        memorize (bool): Memorize to cache the anchors. Make sure there is
-            enough memory, especially when you have a very large dataset.
+        memorize (bool): Memorize to cache the anchors computation.
+            Make sure there is enough memory, especially when you have
+            a very large dataset.
     """
 
-    def __init__(self, root: str, fixed_width: int = 16,
+    def __init__(self, root: str, fixed_width: int = 16, short_side: int = 600,
                  memorize: bool = True):
         super().__init__(root)
+        self.anchors = DataList
         self._fixed_width = fixed_width
-        self._convert_gts()
+        self._short_side = short_side
         self._memorize = memorize
+        self._anchor_heights = self._get_anchor_heights()
 
-    def _convert_gts(self):
+    def __getitem__(self, index: int):
+        img = cv2.imread(self.img_paths[index])
+        height, width, _ = img.shape
+        scale = self._calc_scale(height, width)
+        resized_height = int(height * scale)
+        resized_width = int(width * scale)
+
+        resized_img = cv2.resize(img,
+                                 (resized_width, resized_height),
+                                 interpolation=cv2.INTER_NEAREST)
+        resized_gts = self._convert_gts(index, scale)
+        anchors = self._mem_calc_anchors(resized_gts) if self._memorize \
+            else self._calc_anchors(resized_gts)
+
+        return resized_img, resized_gts, anchors
+
+    def _get_anchor_heights(self):
         """
-        Convert object ground truth to sequential fixed-width
-        fine-scale text proposals(anchors).
+        Anchor heights:
+        1. fixed_width / 0.7 ** -1, i.e. 70% fixed_width
+        2. fixed_width / 0.7 ** 0， i.e. fixed_width
+        3. fixed_width / 0.7 ** 1
+        4. fixed_width / 0.7 ** 2
+        ...
+        10. fixed_width / 0.7 ** 8
         """
-        anchors = []
-        for gt in self.gts:
-            anch = []
-            for t in gt:
-                anch += self._gt2anchors(t)
-            anchors.append(anch)
+        r = 0.7
+        k = 10
+        s = -1
+        return [round(self._fixed_width / r ** e) for e in range(s, k + s)]
 
-        self.gts = anchors
+    def _calc_scale(self, height: int, width: int) -> float:
+        return min(height, width) / self._short_side
 
-    def _gt2anchors(self, gt_pts, w=16):
-        x01, y01, x02, y02, x03, y03, x04, y04 = gt_pts
+    def _convert_gts(self, index: int, scale: float) -> List[Tuple]:
+        """
+        Convert object ground truth according to the image scale.
+        """
+        gts = []
+        for x1, y1, x2, y2, x3, y3, x4, y4 in self.gts[index]:
+            x1 = math.floor(x1 * scale)
+            y1 = math.floor(y1 * scale)
+
+            x2 = math.ceil(x2 * scale)
+            y2 = math.floor(y2 * scale)
+
+            x3 = math.ceil(x3 * scale)
+            y3 = math.ceil(y3 * scale)
+
+            x4 = math.floor(x4 * scale)
+            y4 = math.ceil(y4 * scale)
+
+            gts.append((x1, y1, x2, y2, x3, y3, x4, y4))
+
+        return gts
+
+    @lru_cache(maxsize=None)
+    def _mem_calc_anchors(self, gts: list) -> List[Tuple[int, float, int]]:
+        return self._calc_anchors(gts)
+
+    def _calc_anchors(self, gts: list) -> List[Tuple[int, float, int]]:
+        """
+        Calculate anchors according to ground truth boxes.
+
+        Args:
+            boxes (list): All the text boxes with fixed width created from
+                the original text ground truth.
+
+
+        Returns:
+            List[Tuple[pos (int), cy (float), h (int)]]:
+                pos: The left side position(x-axis) of the anchor box on the features map.
+                cy: The center(y-axis) of the anchor box on the input image.
+                h: The height of the anchor box on the input image.
+        """
+        boxes = []      # anchors in form of (x1, y1, x2, y2, x3, y3, x4, y4)
+        for gt_box in gts:
+            boxes += self._gt2anchors(gt_box)
+
+        anchors = []  # anchors in form of (pos, cy, h)
+        for x1, y1, *_, y4 in boxes:
+            pos = x1 // self._fixed_width
+            cy = (y1 + y4) / 2
+            h = y4 - y1
+            anchors.append((pos, cy, h))
+
+        return anchors
+
+    def _gt2anchors(self, gt_box: tuple):
+        x01, y01, x02, y02, x03, y03, x04, y04 = gt_box
         xmin = min(x01, x04)
-        n = math.ceil((max(x02, x03) - min(x01, x04)) / w)
+        n = math.ceil((max(x02, x03) - min(x01, x04)) / self._fixed_width)
         anchors = []
         for i in range(n):
-            x1 = x4 = math.floor(xmin + i * w)
-            x2 = x3 = x1 + w
-            y1, y4 = self._anchor_ys(gt_pts, x1)
-            y2, y3 = self._anchor_ys(gt_pts, x2)
+            x1 = x4 = math.floor(xmin + i * self._fixed_width)
+            x2 = x3 = x1 + self._fixed_width
+            y1, y4 = self._anchor_ys(gt_box, x1)
+            y2, y3 = self._anchor_ys(gt_box, x2)
             y1 = y2 = math.floor(min(y1, y2))
             y3 = y4 = math.ceil(max(y3, y4))
             anchors.append((x1, y1, x2, y2, x3, y3, x4, y4))
@@ -167,10 +243,10 @@ class TextProposalFolder(GroundTruthFolder):
         b = (y2 * x1 - y1 * x2) / (x1 - x2)
         return lambda x: a * x + b
 
-    def _anchor_ys(self, gt_pts, x, w=16):
-        x1, y1, x2, y2, x3, y3, x4, y4 = gt_pts
+    def _anchor_ys(self, gt_box: tuple, x):
+        x1, y1, x2, y2, x3, y3, x4, y4 = gt_box
         if x > max(x2, x3):
-            x -= w
+            x -= self._fixed_width
         if x1 < x4:
             if x4 < x2:
                 if x <= x4:
