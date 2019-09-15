@@ -147,7 +147,7 @@ class CTPNFolder(GroundTruthFolder):
         anchors = self._mem_calc_anchors(resized_gts) if self._memorize \
             else self._calc_anchors(resized_gts)
 
-        return resized_img, resized_gts, anchors
+        return resized_img, anchors
 
     def _get_anchor_heights(self):
         """
