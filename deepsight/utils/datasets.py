@@ -190,10 +190,10 @@ class CTPNFolder(GroundTruthFolder):
         return gts
 
     @lru_cache(maxsize=None)
-    def _mem_calc_anchors(self, gts: list) -> List[Tuple[int, float, int]]:
+    def _mem_calc_anchors(self, gts: list) -> List[List[Tuple[int, float, int]]]:
         return self._calc_anchors(gts)
 
-    def _calc_anchors(self, gts: list) -> List[Tuple[int, float, int]]:
+    def _calc_anchors(self, gts: list) -> List[List[Tuple[int, float, int]]]:
         """
         Calculate anchors according to ground truth boxes.
 
@@ -203,23 +203,24 @@ class CTPNFolder(GroundTruthFolder):
 
 
         Returns:
-            List[Tuple[pos (int), cy (float), h (int)]]:
-                pos: The left side position(x-axis) of the anchor box on the features map.
+            List[List[Tuple[pos (int), cy (float), h (int)]]]:
+                pos: The left side position(x-axis) of the anchor box on
+                    features map.
                 cy: The center(y-axis) of the anchor box on the input image.
                 h: The height of the anchor box on the input image.
         """
-        boxes = []      # anchors in form of (x1, y1, x2, y2, x3, y3, x4, y4)
+        anchors_list = []
         for gt_box in gts:
-            boxes += self._gt2anchors(gt_box)
+            boxes = self._gt2anchors(gt_box)    # boxes of the same text line
+            anchors = []    # anchors of the same text line
+            for x1, y1, *_, y4 in boxes:
+                pos = x1 // self._fixed_width
+                cy = (y1 + y4) / 2
+                h = y4 - y1
+                anchors.append((pos, cy, h))
+            anchors_list.append(anchors)
 
-        anchors = []  # anchors in form of (pos, cy, h)
-        for x1, y1, *_, y4 in boxes:
-            pos = x1 // self._fixed_width
-            cy = (y1 + y4) / 2
-            h = y4 - y1
-            anchors.append((pos, cy, h))
-
-        return anchors
+        return anchors_list
 
     def _gt2anchors(self, gt_box: tuple):
         x01, y01, x02, y02, x03, y03, x04, y04 = gt_box
