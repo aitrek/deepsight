@@ -205,7 +205,7 @@ class CTPNFolder(GroundTruthFolder):
         Returns:
             List[List[Tuple[pos (int), cy (float), h (int)]]]:
                 pos: The left side position(x-axis) of the anchor box on
-                    features map.
+                    original image.
                 cy: The center(y-axis) of the anchor box on the input image.
                 h: The height of the anchor box on the input image.
         """
@@ -214,10 +214,9 @@ class CTPNFolder(GroundTruthFolder):
             boxes = self._gt2anchors(gt_box)    # boxes of the same text line
             anchors = []    # anchors of the same text line
             for x1, y1, *_, y4 in boxes:
-                pos = x1 // self._fixed_width
                 cy = (y1 + y4) / 2
                 h = y4 - y1
-                anchors.append((pos, cy, h))
+                anchors.append((x1, cy, h))
             anchors_list.append(anchors)
 
         return anchors_list
