@@ -8,7 +8,7 @@ from typing import Tuple, List
 from torch.utils.data import Dataset
 from functools import lru_cache
 
-IMG_EXTS = [".jpe", ".jpg", ".jpeg", ".png"]
+IMG_EXTS = ["jpe", "jpg", "jpeg", "png"]
 
 
 class DataList(list):
