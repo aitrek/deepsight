@@ -113,6 +113,135 @@ def train_test_split(dataset: GroundTruthFolder, test_size: float,
     return train_dataset, test_dataset
 
 
+class AnchorData:
+
+    def __init__(self, height: int, width: int, k: int = 10,
+                 fixed_width: int = 16):
+        self._height = height
+        self._width = width
+        self._k = k
+        self._fixed_width = fixed_width
+        self._anchor_heights = self._get_anchor_heights()
+        self._data = self._init_data()
+
+    @property
+    def shape(self):
+        return self._height, self._width, self._k
+
+    def _init_data(self):
+        data = {}
+        for y in range(self._height):
+            for x in range(self._width):
+                for z in range(self._k):
+                    data[(y, x, z)] = (
+                        -1,    # 1 text(iou > 0.7), 0 ignored(0.5 <= iou <= 0.7), -1 non-text(iou < 0.5)
+                        0,     # -1 left side, 0 inside, 1 right side
+                        0.0,   # vc
+                        0.0,   # vh
+                        0.0,   # offset
+                        0.0    # iou
+                    )
+        return data
+
+    def _get_anchor_heights(self):
+        """
+        Anchor heights:
+        1. fixed_width / 0.7 ** -1, i.e. 70% fixed_width
+        2. fixed_width / 0.7 ** 0， i.e. fixed_width
+        3. fixed_width / 0.7 ** 1
+        4. fixed_width / 0.7 ** 2
+        ...
+        10. fixed_width / 0.7 ** 8
+        """
+        r = 0.7
+        s = -1
+        return [round(self._fixed_width / r ** e) for e in range(s, self._k + s)]
+
+    def analyse(self, anchors_list: List[List[Tuple[int, float, int]]]):
+        for anchors in anchors_list:
+            for i, anchor in enumerate(anchors):
+                idx_max = (0, 0, 0)
+                result_max = None
+
+                # variable with "_fm" means on feature maps, otherwise on image.
+                x_gt, cy_gt, ah_gt = anchor
+                x_fm = x_gt // self._fixed_width
+
+                for y_fm in range(self._height):
+                    for z, ah in enumerate(self._anchor_heights):
+                        is_positive = False
+
+                        cy = y_fm * self._fixed_width
+                        iou = self._cal_iou(cy, ah, cy_gt, ah_gt)
+
+                        o = 0
+                        if i == 0:
+                            side = -1
+                            o = x_fm  - x_gt / self._fixed_width - 1 / 2
+                        elif i == len(anchors) - 1:
+                            side = 1
+                            o = x_fm - x_gt / self._fixed_width - 1 / 2
+                        else:
+                            side = 0
+
+                        vc = 0.0
+                        vh = 0.0
+                        if iou < 0.5:
+                            text = -1
+                        elif iou > 0.7:
+                            is_positive = True
+                            text = 1
+                            vc = (cy_gt - cy) / ah
+                            vh = math.log(ah_gt / ah)
+                        else:
+                            text = 0
+
+                        result = (text, side, vc, vh, o, iou)
+                        if is_positive:
+                            if self._data[(y_fm, x_fm, z)][0] != 1:
+                                self._data[(y_fm, x_fm, z)] = result
+                            else:
+                                if self._data[(y_fm, x_fm, z)][-1] < iou:
+                                    self._data[(y_fm, x_fm, z)] = result
+
+                        if result_max is None or result[-1] > result_max[-1]:
+                            idx_max = (y_fm, x_fm, z)
+                            result_max = result
+
+                # idx_max and iou_max is used to find the anchor
+                # with highest iou overlap with a GT box if iou < 0.7.
+                if result_max:
+                    for yi in range(self._height):
+                        for zi in range(self._k):
+                            if self._data[(yi, x_fm, zi)][0] == 1:
+                                break
+                        else:
+                            self._data[idx_max] = result_max
+
+        return self
+
+    def _cal_iou(self, cy: int, h: int, cy_gt: float, h_gt: int) -> float:
+        """
+        Calculate iou.
+
+        Args:
+            cy (int): Center of the anchor box on y-axis.
+            h (int): Height of the anchor.
+            cy_gt (int): Center of the GT anchor box on y-axis.
+            h_gt (int): Height of the GT anchor.
+
+        Returns:
+
+        """
+        overlap = max((h + h_gt) - (max((cy + h / 2), (cy_gt + h_gt / 2)) -
+                                    min((cy - h / 2), (cy_gt - h_gt / 2))),
+                      0)
+        return overlap / (h + h_gt - overlap)
+
+    def get(self, h: int, w: int, k: int):
+        return self._data[(h, w, k)]
+
+
 class CTPNFolder(GroundTruthFolder):
     """CTPN dataset
 
@@ -147,7 +276,9 @@ class CTPNFolder(GroundTruthFolder):
         anchors = self._mem_calc_anchors(resized_gts) if self._memorize \
             else self._calc_anchors(resized_gts)
 
-        return resized_img, anchors
+        anchor_data = AnchorData(resized_height, resized_width).analyse(anchors)
+
+        return resized_img, anchor_data
 
     def _get_anchor_heights(self):
         """
@@ -198,9 +329,8 @@ class CTPNFolder(GroundTruthFolder):
         Calculate anchors according to ground truth boxes.
 
         Args:
-            boxes (list): All the text boxes with fixed width created from
-                the original text ground truth.
-
+            gts (list): Text boxes with fixed width created from the original
+                text ground truth.
 
         Returns:
             List[List[Tuple[pos (int), cy (float), h (int)]]]:
