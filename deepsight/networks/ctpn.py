@@ -86,17 +86,21 @@ class CTPN(nn.Module):
 
 class CTPNLoss(nn.Module):
 
-    def __init__(self, Ns: int = 128, k: int = 10, use_cuda: bool = False):
+    def __init__(self, Ns: int = 128, k: int = 10):
         super().__init__()
         self._Ns = Ns       # number of anchors for each mini-batch
         self._k = k
-        self._use_cuda = use_cuda
+        self._use_cuda = False
         self._ratio = 0.5   # ratio for positive and negative samples.
         self._lambda1 = 1.0
         self._lambda2 = 2.0
         self._Ls = nn.CrossEntropyLoss()    # text/non-text
         self._Lv = nn.SmoothL1Loss()        # coordinate
         self._Lo = nn.SmoothL1Loss()        # side-refinement
+
+    def cuda(self, device=None):
+        super().cuda(device)
+        self._use_cuda = True
 
     def forward(self, x: torch.Tensor, anchor_data: AnchorData):
         def get_choices(h: int, w: int, k: int) -> List[Tuple[int, int, int]]:
