@@ -1,6 +1,6 @@
 import cv2
 import numpy as np
-from utils.image import resize
+from .image import resize
 
 
 class UnifySize:
