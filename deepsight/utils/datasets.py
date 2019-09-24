@@ -6,7 +6,7 @@ import random
 import cv2
 from typing import Tuple, List
 from torch.utils.data import Dataset
-from functools import lru_cache
+
 
 IMG_EXTS = ["jpe", "jpg", "jpeg", "png"]
 
@@ -65,7 +65,7 @@ class GroundTruthFolder(Dataset):
         try:
             with open(gt_path) as gt_file:
                 for line in gt_file:
-                    boxes.append((int(t) for t in re.split("\s+", line.strip())))
+                    boxes.append([int(t) for t in re.split("\s+", line.strip())])
         except FileNotFoundError:
             pass
         return boxes
@@ -113,135 +113,6 @@ def train_test_split(dataset: GroundTruthFolder, test_size: float,
     return train_dataset, test_dataset
 
 
-class AnchorData:
-
-    def __init__(self, height: int, width: int, k: int = 10,
-                 fixed_width: int = 16):
-        self._height = height
-        self._width = width
-        self._k = k
-        self._fixed_width = fixed_width
-        self._anchor_heights = self._get_anchor_heights()
-        self._data = self._init_data()
-
-    @property
-    def shape(self):
-        return self._height, self._width, self._k
-
-    def _init_data(self):
-        data = {}
-        for y in range(self._height):
-            for x in range(self._width):
-                for z in range(self._k):
-                    data[(y, x, z)] = (
-                        -1,    # 1 text(iou > 0.7), 0 ignored(0.5 <= iou <= 0.7), -1 non-text(iou < 0.5)
-                        0,     # -1 left side, 0 inside, 1 right side
-                        0.0,   # vc
-                        0.0,   # vh
-                        0.0,   # offset
-                        0.0    # iou
-                    )
-        return data
-
-    def _get_anchor_heights(self):
-        """
-        Anchor heights:
-        1. fixed_width / 0.7 ** -1, i.e. 70% fixed_width
-        2. fixed_width / 0.7 ** 0， i.e. fixed_width
-        3. fixed_width / 0.7 ** 1
-        4. fixed_width / 0.7 ** 2
-        ...
-        10. fixed_width / 0.7 ** 8
-        """
-        r = 0.7
-        s = -1
-        return [round(self._fixed_width / r ** e) for e in range(s, self._k + s)]
-
-    def analyse(self, anchors_list: List[List[Tuple[int, float, int]]]):
-        for anchors in anchors_list:
-            for i, anchor in enumerate(anchors):
-                idx_max = (0, 0, 0)
-                result_max = None
-
-                # variable with "_fm" means on feature maps, otherwise on image.
-                x_gt, cy_gt, ah_gt = anchor
-                x_fm = x_gt // self._fixed_width
-
-                for y_fm in range(self._height):
-                    for z, ah in enumerate(self._anchor_heights):
-                        is_positive = False
-
-                        cy = y_fm * self._fixed_width
-                        iou = self._cal_iou(cy, ah, cy_gt, ah_gt)
-
-                        o = 0
-                        if i == 0:
-                            side = -1
-                            o = x_fm  - x_gt / self._fixed_width - 1 / 2
-                        elif i == len(anchors) - 1:
-                            side = 1
-                            o = x_fm - x_gt / self._fixed_width - 1 / 2
-                        else:
-                            side = 0
-
-                        vc = 0.0
-                        vh = 0.0
-                        if iou < 0.5:
-                            text = -1
-                        elif iou > 0.7:
-                            is_positive = True
-                            text = 1
-                            vc = (cy_gt - cy) / ah
-                            vh = math.log(ah_gt / ah)
-                        else:
-                            text = 0
-
-                        result = (text, side, vc, vh, o, iou)
-                        if is_positive:
-                            if self._data[(y_fm, x_fm, z)][0] != 1:
-                                self._data[(y_fm, x_fm, z)] = result
-                            else:
-                                if self._data[(y_fm, x_fm, z)][-1] < iou:
-                                    self._data[(y_fm, x_fm, z)] = result
-
-                        if result_max is None or result[-1] > result_max[-1]:
-                            idx_max = (y_fm, x_fm, z)
-                            result_max = result
-
-                # idx_max and iou_max is used to find the anchor
-                # with highest iou overlap with a GT box if iou < 0.7.
-                if result_max:
-                    for yi in range(self._height):
-                        for zi in range(self._k):
-                            if self._data[(yi, x_fm, zi)][0] == 1:
-                                break
-                        else:
-                            self._data[idx_max] = result_max
-
-        return self
-
-    def _cal_iou(self, cy: int, h: int, cy_gt: float, h_gt: int) -> float:
-        """
-        Calculate iou.
-
-        Args:
-            cy (int): Center of the anchor box on y-axis.
-            h (int): Height of the anchor.
-            cy_gt (int): Center of the GT anchor box on y-axis.
-            h_gt (int): Height of the GT anchor.
-
-        Returns:
-
-        """
-        overlap = max((h + h_gt) - (max((cy + h / 2), (cy_gt + h_gt / 2)) -
-                                    min((cy - h / 2), (cy_gt - h_gt / 2))),
-                      0)
-        return overlap / (h + h_gt - overlap)
-
-    def get(self, h: int, w: int, k: int):
-        return self._data[(h, w, k)]
-
-
 class CTPNFolder(GroundTruthFolder):
     """CTPN dataset
 
@@ -252,33 +123,39 @@ class CTPNFolder(GroundTruthFolder):
             Make sure there is enough memory, especially when you have
             a very large dataset.
     """
+    _memory = {}
 
     def __init__(self, root: str, fixed_width: int = 16, short_side: int = 600,
-                 memorize: bool = True):
+                 memorize: bool = True, transformer=None):
         super().__init__(root)
         self.anchors = DataList
         self._fixed_width = fixed_width
         self._short_side = short_side
         self._memorize = memorize
+        self._transformer = transformer
         self._anchor_heights = self._get_anchor_heights()
 
     def __getitem__(self, index: int):
-        img = cv2.imread(self.img_paths[index])
+        img_path = self.img_paths[index]
+        img = cv2.imread(img_path)
         height, width, _ = img.shape
-        scale = self._calc_scale(height, width)
-        resized_height = int(height * scale)
-        resized_width = int(width * scale)
 
-        resized_img = cv2.resize(img,
-                                 (resized_width, resized_height),
-                                 interpolation=cv2.INTER_NEAREST)
-        resized_gts = self._convert_gts(index, scale)
-        anchors = self._mem_calc_anchors(resized_gts) if self._memorize \
-            else self._calc_anchors(resized_gts)
+        if self._transformer is not None:
+            img = self._transformer(img)
 
-        anchor_data = AnchorData(resized_height, resized_width).analyse(anchors)
+        if self._memorize:
+            if index in self._memory:
+                anchors_list = self._memory[index]
+            else:
+                scale = self._calc_scale(height, width)
+                anchors_list = self._calc_anchors(index, scale)
+                self._memory[index] = anchors_list
+        else:
+            scale = self._calc_scale(height, width)
+            anchors_list = self._calc_anchors(index, scale)
+            self._memory[index] = anchors_list
 
-        return resized_img, anchor_data
+        return img, (index, anchors_list)
 
     def _get_anchor_heights(self):
         """
@@ -296,7 +173,7 @@ class CTPNFolder(GroundTruthFolder):
         return [round(self._fixed_width / r ** e) for e in range(s, k + s)]
 
     def _calc_scale(self, height: int, width: int) -> float:
-        return min(height, width) / self._short_side
+        return self._short_side / min(height, width)
 
     def _convert_gts(self, index: int, scale: float) -> List[Tuple]:
         """
@@ -320,11 +197,7 @@ class CTPNFolder(GroundTruthFolder):
 
         return gts
 
-    @lru_cache(maxsize=None)
-    def _mem_calc_anchors(self, gts: list) -> List[List[Tuple[int, float, int]]]:
-        return self._calc_anchors(gts)
-
-    def _calc_anchors(self, gts: list) -> List[List[Tuple[int, float, int]]]:
+    def _calc_anchors(self, index: int, scale: float) -> List[List[Tuple[int, float, float]]]:
         """
         Calculate anchors according to ground truth boxes.
 
@@ -333,19 +206,19 @@ class CTPNFolder(GroundTruthFolder):
                 text ground truth.
 
         Returns:
-            List[List[Tuple[pos (int), cy (float), h (int)]]]:
+            List[List[Tuple[pos (int), cy (float), h (float)]]]:
                 pos: The left side position(x-axis) of the anchor box on
                     original image.
                 cy: The center(y-axis) of the anchor box on the input image.
                 h: The height of the anchor box on the input image.
         """
         anchors_list = []
-        for gt_box in gts:
+        for gt_box in self._convert_gts(index, scale):
             boxes = self._gt2anchors(gt_box)    # boxes of the same text line
             anchors = []    # anchors of the same text line
             for x1, y1, *_, y4 in boxes:
                 cy = (y1 + y4) / 2
-                h = y4 - y1
+                h = float(y4 - y1)
                 anchors.append((x1, cy, h))
             anchors_list.append(anchors)
 
