@@ -30,5 +30,5 @@ setup(
     license="MIT",
     packages=find_packages(),
     include_package_data=True,
-    install_requires=get_requires()
+    # install_requires=get_requires()
 )
