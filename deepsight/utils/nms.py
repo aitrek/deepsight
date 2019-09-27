@@ -2,7 +2,7 @@
 import numpy as np
 from typing import Sequence, Tuple, List
 
-BoxType = Tuple[int, int, int, int]
+BoxType = Tuple[int, int, int, int]     # [left, top, right, bottom]
 
 
 def nms(boxes: Sequence[BoxType], scores: Sequence[float], threshold: float) -> List[int]:
