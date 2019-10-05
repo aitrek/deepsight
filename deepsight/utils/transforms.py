@@ -60,7 +60,7 @@ class ShortSideTransform:
         scale = self._short_side / min(height, width)
         resize_height = int(height * scale)
         resize_width = int(width * scale)
-        resize_img = cv2.resize(img, (resize_height, resize_width),
+        resize_img = cv2.resize(img, (resize_width, resize_height),
                                 cv2.INTER_NEAREST)
         return resize_img
 
