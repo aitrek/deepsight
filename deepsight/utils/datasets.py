@@ -11,6 +11,12 @@ from torch.utils.data import Dataset
 IMG_EXTS = ["jpe", "jpg", "jpeg", "png"]
 
 
+def line_func(x1, y1, x2, y2):
+    a = (y1 - y2) / (x1 - x2)
+    b = (y2 * x1 - y1 * x2) / (x1 - x2)
+    return lambda x: a * x + b
+
+
 class DataList(list):
     pass
 
@@ -175,23 +181,27 @@ class CTPNFolder(GroundTruthFolder):
     def _calc_scale(self, height: int, width: int) -> float:
         return self._short_side / min(height, width)
 
-    def _convert_gts(self, index: int, scale: float) -> List[Tuple]:
+    def _convert_gts(self, index: int, scale: float) -> List[Tuple[float, ...]]:
         """
         Convert object ground truth according to the image scale.
+
+        Notes:
+            The result should not be converted to int, otherwise it will cause
+            accuracy problem of slops of the gt box.
         """
         gts = []
         for x1, y1, x2, y2, x3, y3, x4, y4 in self.gts[index]:
-            x1 = math.floor(x1 * scale)
-            y1 = math.floor(y1 * scale)
+            x1 = x1 * scale
+            y1 = y1 * scale
 
-            x2 = math.ceil(x2 * scale)
-            y2 = math.floor(y2 * scale)
+            x2 = x2 * scale
+            y2 = y2 * scale
 
-            x3 = math.ceil(x3 * scale)
-            y3 = math.ceil(y3 * scale)
+            x3 = x3 * scale
+            y3 = y3 * scale
 
-            x4 = math.floor(x4 * scale)
-            y4 = math.ceil(y4 * scale)
+            x4 = x4 * scale
+            y4 = y4 * scale
 
             gts.append((x1, y1, x2, y2, x3, y3, x4, y4))
 
@@ -226,75 +236,111 @@ class CTPNFolder(GroundTruthFolder):
 
     def _gt2anchors(self, gt_box: tuple):
         x01, y01, x02, y02, x03, y03, x04, y04 = gt_box
-        xmin = min(x01, x04)
-        n = math.ceil((max(x02, x03) - min(x01, x04)) / self._fixed_width)
+        xmin = min(x01, x02, x03, x04)
+        xmax = max(x01, x02, x03, x04)
+        n = math.ceil((xmax - xmin) / self._fixed_width)
         anchors = []
         for i in range(n):
-            x1 = x4 = math.floor(xmin + i * self._fixed_width)
-            x2 = x3 = x1 + self._fixed_width
-            y1, y4 = self._anchor_ys(gt_box, x1)
-            y2, y3 = self._anchor_ys(gt_box, x2)
-            y1 = y2 = math.floor(min(y1, y2))
-            y3 = y4 = math.ceil(max(y3, y4))
+            left = xmin + i * self._fixed_width
+            right = left + self._fixed_width - 1
+            y12, y34 = self._anchor_ys(gt_box, left, right)
+            x1 = x4 = math.floor(left)
+            x2 = x3 = x1 + self._fixed_width - 1
+            y1 = y2 = math.floor(y12)
+            y3 = y4 = math.ceil(y34)
             anchors.append((x1, y1, x2, y2, x3, y3, x4, y4))
 
         return anchors
 
-    @staticmethod
-    def _line_fn(x1, y1, x2, y2):
-        a = (y1 - y2) / (x1 - x2)
-        b = (y2 * x1 - y1 * x2) / (x1 - x2)
-        return lambda x: a * x + b
-
-    def _anchor_ys(self, gt_box: tuple, x):
+    def _anchor_ys(self, gt_box: tuple, left: float, right: float):
         x1, y1, x2, y2, x3, y3, x4, y4 = gt_box
-        if x > max(x2, x3):
-            x -= self._fixed_width
-        if x1 < x4:
-            if x4 < x2:
-                if x <= x4:
-                    y12 = self._line_fn(x1, y1, x2, y2)(x)
-                    y34 = self._line_fn(x1, y1, x4, y4)(x)
-                elif x4 < x <= x2:
-                    y12 = self._line_fn(x1, y1, x2, y2)(x)
-                    y34 = self._line_fn(x4, y4, x3, y3)(x)
-                else:
-                    y12 = self._line_fn(x2, y2, x3, y3)(x)
-                    y34 = self._line_fn(x4, y4, x3, y3)(x)
-            else:
-                if x <= x2:
-                    y12 = self._line_fn(x1, y1, x2, y2)(x)
-                    y34 = self._line_fn(x1, y1, x4, y4)(x)
-                elif x2 < x <= x4:
-                    y12 = self._line_fn(x2, y2, x3, y3)(x)
-                    y34 = self._line_fn(x1, y1, x4, y4)(x)
-                else:
-                    y12 = self._line_fn(x2, y2, x3, y3)(x)
-                    y34 = self._line_fn(x4, y4, x3, y3)(x)
 
-        elif x1 > x4:
-            if x1 < x3:
-                if x <= x1:
-                    y12 = self._line_fn(x4, y4, x1, y1)(x)
-                    y34 = self._line_fn(x4, y4, x3, y3)(x)
-                elif x1 < x <= x3:
-                    y12 = self._line_fn(x1, y1, x2, y2)(x)
-                    y34 = self._line_fn(x4, y4, x3, y3)(x)
+        if x1 == x4:
+            y12, y34 = y1, y4
+
+        elif x1 < x4:
+            if x4 < x2:
+                if left < x4:
+                    if right <= x4:
+                        y12 = line_func(x1, y1, x2, y2)(right)
+                        y34 = line_func(x1, y1, x4, y4)(right)
+                    elif right <= x2:
+                        y12 = line_func(x1, y1, x2, y2)(right)
+                        y34 = y4
+                    else:
+                        y12 = y2
+                        y34 = y4
+                elif left < x2:
+                    if right <= x2:
+                        y12 = line_func(x1, y1, x2, y2)(right)
+                    else:
+                        y12 = y2
+                    y34 = line_func(x4, y4, x3, y3)(left)
                 else:
-                    y12 = self._line_fn(x1, y1, x2, y2)(x)
-                    y34 = self._line_fn(x3, y3, x2, y2)(x)
+                    y12 = line_func(x2, y2, x3, y3)(left)
+                    y34 = line_func(x4, y4, x3, y3)(left)
+
             else:
-                if x <= x3:
-                    y12 = self._line_fn(x4, y4, x1, y1)(x)
-                    y34 = self._line_fn(x4, y4, x3, y3)(x)
-                elif x3 < x <= x1:
-                    y12 = self._line_fn(x4, y4, x1, y1)(x)
-                    y34 = self._line_fn(x3, y3, x2, y2)(x)
+                if left < x2:
+                    if right <= x2:
+                        y12 = line_func(x1, y1, x2, y2)(right)
+                        y34 = line_func(x1, y1, x4, y4)(right)
+                    elif right <= x4:
+                        y12 = y2
+                        y34 = line_func(x1, y1, x4, y4)(right)
+                    else:
+                        y12 = y2
+                        y34 = y4
+                elif left < x4:
+                    y12 = line_func(x2, y2, x3, y3)(left)
+                    if right <= x4:
+                        y34 = line_func(x1, y1, x4, y4)(right)
+                    else:
+                        y34 = y4
                 else:
-                    y12 = self._line_fn(x1, y1, x2, y2)(x)
-                    y34 = self._line_fn(x3, y3, x2, y2)(x)
-        else:
-            y12 = y1
-            y34 = y4
+                    y12 = line_func(x2, y2, x3, y3)(left)
+                    y34 = line_func(x4, y4, x3, y3)(left)
+
+        else:   # x1 > x4
+            if x1 < x3:
+                if left < x1:
+                    if right <= x1:
+                        y12 = line_func(x4, y4, x1, y1)(right)
+                        y34 = line_func(x4, y4, x3, y3)(right)
+                    elif right <= x3:
+                        y12 = y1
+                        y34 = line_func(x4, y4, x3, y3)(right)
+                    else:
+                        y12 = y1
+                        y34 = y3
+                elif left < x3:
+                    y12 = line_func(x1, y1, x2, y2)(left)
+                    if right <= x3:
+                        y34 = line_func(x4, y4, x3, y3)(right)
+                    else:
+                        y34 = y3
+                else:
+                    y12 = line_func(x1, y1, x2, y2)(left)
+                    y34 = line_func(x3, y3, x2, y2)(left)
+            else:
+                if left < x3:
+                    if right <= x3:
+                        y12 = line_func(x4, y4, x1, y1)(right)
+                        y34 = line_func(x4, y4, x3, y3)(right)
+                    elif right <= x1:
+                        y12 = line_func(x4, y4, x1, y1)(right)
+                        y34 = y3
+                    else:
+                        y12 = y1
+                        y34 = y3
+                elif left < x1:
+                    if right <= x1:
+                        y12 = line_func(x4, y4, x1, y1)(right)
+                    else:
+                        y12 = y1
+                    y34 = line_func(x3, y3, x2, y2)(left)
+                else:
+                    y12 = line_func(x1, y1, x2, y2)(left)
+                    y34 = line_func(x3, y3, x2, y2)(left)
 
         return y12, y34
