@@ -1,3 +1,4 @@
+"""Connectionist Text Proposal Network"""
 import random
 import math
 import torch
