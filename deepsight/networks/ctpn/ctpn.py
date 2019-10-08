@@ -6,8 +6,8 @@ import torchvision.models as models
 import torchvision.transforms as transforms
 import torch.nn.functional as F
 from typing import Tuple, List
-from ..utils.transforms import ShortSideTransform
-from ..utils.nms import nms
+from ...utils.transforms import ShortSideTransform
+from ...utils.nms import nms
 
 
 ctpn_transformer = transforms.Compose(
@@ -94,18 +94,11 @@ class CTPN(nn.Module):
                                              bidirectional=True))
 
         self.fc = nn.Sequential()
-        # todo enough with only one fc layer?
         self.fc.add_module("fc", nn.Conv2d(in_channels=256,
                                            out_channels=512,
                                            kernel_size=1,
                                            stride=1,
                                            padding=0))
-    # self.fc.add_module("relu0", nn.ReLU(inplace=True))            # ???????????????????????????
-    #     self.fc.add_module("fc1", nn.Conv2d(in_channels=512,
-    #                                         out_channels=(2 + 2 + 1) * 10,
-    #                                         kernel_size=1,
-    #                                         stride=1,
-    #                                         padding=0))
         self.vc = nn.Conv2d(in_channels=512,
                             out_channels=2 * 10,
                             kernel_size=1,
