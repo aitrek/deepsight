@@ -7,6 +7,7 @@ import torchvision.transforms as transforms
 import torch.nn.functional as F
 from typing import Tuple, List
 from ..utils.transforms import ShortSideTransform
+from ..utils.nms import nms
 
 
 ctpn_transformer = transforms.Compose(
@@ -16,6 +17,24 @@ ctpn_transformer = transforms.Compose(
         transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5])
     ]
 )
+
+
+def calc_anchor_heights(k: int = 10, fixed_width: int = 16):
+    """
+    Anchor heights:
+    1. fixed_width / 0.7 ** -1, i.e. 70% fixed_width
+    2. fixed_width / 0.7 ** 0， i.e. fixed_width
+    3. fixed_width / 0.7 ** 1
+    4. fixed_width / 0.7 ** 2
+    ...
+    10. fixed_width / 0.7 ** 8
+    """
+    r = 0.7
+    s = -1
+    return [round(fixed_width / r ** e) for e in range(s, k + s)]
+
+
+ANCHOR_HEIGHTS = calc_anchor_heights()
 
 
 class SpatialUnfold(nn.Module):
@@ -81,21 +100,131 @@ class CTPN(nn.Module):
                                            kernel_size=1,
                                            stride=1,
                                            padding=0))
-        self.fc.add_module("relu0", nn.ReLU(inplace=True))
-        self.fc.add_module("fc1", nn.Conv2d(in_channels=512,
-                                            out_channels=(2 + 2 + 1) * 10,
-                                            kernel_size=1,
-                                            stride=1,
-                                            padding=0))
+    # self.fc.add_module("relu0", nn.ReLU(inplace=True))            # ???????????????????????????
+    #     self.fc.add_module("fc1", nn.Conv2d(in_channels=512,
+    #                                         out_channels=(2 + 2 + 1) * 10,
+    #                                         kernel_size=1,
+    #                                         stride=1,
+    #                                         padding=0))
+        self.vc = nn.Conv2d(in_channels=512,
+                            out_channels=2 * 10,
+                            kernel_size=1,
+                            stride=1,
+                            padding=0)
+        self.score = nn.Conv2d(in_channels=512,
+                            out_channels=2 * 10,
+                            kernel_size=1,
+                            stride=1,
+                            padding=0)
+        self.side = nn.Conv2d(in_channels=512,
+                            out_channels=10,
+                            kernel_size=1,
+                            stride=1,
+                            padding=0)
 
     def forward(self, x):
         x = self.cnn(x)
         x = self.rnn(x)[0]
         x = x.transpose(0, 2).transpose(1, 2).unsqueeze(0)
         x = self.fc(x)
-        x = x.transpose(1, 3).transpose(1, 2)
+        # x = x.transpose(1, 3).transpose(1, 2)
+        vc = self.vc(x)
+        score = self.score(x)
+        side = self.side(x)
 
-        return x
+        return vc, score, side
+
+    def predict(self, x):
+        x = self.forward(x)
+        boxes = self._get_boxes(x)
+        if not boxes:
+            return []
+
+        nms_boxes = [box[:4] for box in boxes]
+        nms_score = [box[4] for box in boxes]
+        idxes = nms(nms_boxes, nms_score, 0.7)
+        boxes = [boxes[idx] for idx in idxes]
+        groups = self._group_boxes(boxes)
+        merged_boxes = self._merge_boxes(groups)
+
+        return merged_boxes
+
+    def _get_boxes(self, input, threshold: float = 0.7, fixed_width: int = 16):
+        boxes = []
+        _, height, width, _ = input.shape
+        k = 10
+        for y in range(height):
+            for x in range(width):
+                for z in range(k):
+                    start = 2 * k + 2 * z
+                    end = start + 2
+                    score = input[0, y, x, start:end][1]
+                    # output = F.softmax(input[:, y, x, start:end], dim=1)
+                    # score = float(output[0, 1])
+                    if score > threshold:
+                        vc = input[0, y, x, 2 * k]
+                        vh = input[0, y, x, 2 * k + 1]
+                        o = input[0, y, x, 3 * k + z]
+                        ha = ANCHOR_HEIGHTS[z]
+
+                        cy = vc * ha + y * fixed_width
+                        h = math.exp(vh) * ha
+                        left = math.floor(x * fixed_width - (fixed_width - 1) / 2)
+                        right = math.ceil(x * fixed_width + (fixed_width - 1) / 2)
+                        top = math.floor(cy - h / 2)
+                        bottom = math.ceil(cy + h / 2)
+                        boxes.append((left, top, right, bottom, score, o))
+
+        return boxes
+
+    def _group_boxes(self, boxes):
+        sorted_boxes = sorted(boxes, key=lambda x: x[0])   # sort according to left value
+        groups = [[sorted_boxes[0]]]
+        while len(sorted_boxes) > 0:
+            box = sorted_boxes[0]
+            left, top, right, bottom, *_ = box
+            for group in groups:
+                box1 = group[-1]
+                left1, top1, right1, bottom1, _, o1 = box1
+                if left1 - right >= 50:
+                    continue
+                if max(0, min(bottom, bottom1) - max(top, top1)) / \
+                        (max(bottom, bottom1) - min(top, top1)) <= 0.7:
+                    continue
+                group.append(box)
+                break
+            else:
+                groups.append([box])
+
+        return groups
+
+    def _merge_boxes(self, groups, fixed_width: int = 16):
+        merged = []
+        for group in groups:
+            left, top, right, bottom, _, o = group[0]
+            offset = o * fixed_width
+            left = max(0, math.floor(left + offset))
+            right = math.ceil(right + offset)
+            line_box = (left, top, right, right)  # left side
+            for box in group[1:]:
+                new_left, new_top, new_right, new_bottom = line_box
+                _, top1, right1, bottom1, _, o1 = box
+
+                new_right = right1
+                if top1 < new_top:
+                    new_top = top1
+                if bottom1 > new_bottom:
+                    new_bottom = bottom1
+
+                line_box = (new_left, new_top, new_right, new_bottom)
+            else:   # right side
+                new_left, new_top, new_right, new_bottom = line_box
+                new_right += math.ceil(o1 * fixed_width)
+                line_box = (new_left, new_top, new_right, new_bottom)
+
+            merged.append(line_box)
+
+        return merged
 
 
 class AnchorData:
@@ -112,20 +241,6 @@ class AnchorData:
         self._fixed_width = fixed_width
         self._memoize = memoize
         self.data = self._get_data(anchors_list)
-
-    def _get_anchor_heights(self):
-        """
-        Anchor heights:
-        1. fixed_width / 0.7 ** -1, i.e. 70% fixed_width
-        2. fixed_width / 0.7 ** 0， i.e. fixed_width
-        3. fixed_width / 0.7 ** 1
-        4. fixed_width / 0.7 ** 2
-        ...
-        10. fixed_width / 0.7 ** 8
-        """
-        r = 0.7
-        s = -1
-        return [round(self._fixed_width / r ** e) for e in range(s, self._k + s)]
 
     def _get_data(self, anchors_list: list):
         if self._memoize:
@@ -173,29 +288,24 @@ class AnchorData:
                     )
 
         # update data using anchors_list
-        anchor_heights = self._get_anchor_heights()
         for anchors in anchors_list:
             for i, anchor in enumerate(anchors):
                 idx_max = (0, 0, 0)
                 result_max = None
+                need_max = True
 
                 # variable with "_fm" means on feature maps, otherwise on image.
                 x_gt, cy_gt, ah_gt = anchor
                 x_fm = x_gt // self._fixed_width
-                # todo x_fm out of range
                 if x_fm >= self._width:
                     continue
 
                 for y_fm in range(self._height):
-                    for z, ah in enumerate(anchor_heights):
-                        is_positive = False
-                        # y_fm = torch.tensor([y_fm])
-                        # ah = torch.tensor([ah])
-
+                    for z, ah in enumerate(ANCHOR_HEIGHTS):
                         cy = y_fm * self._fixed_width
                         iou = cal_iou(cy, ah, cy_gt, ah_gt)
 
-                        o = 0
+                        o = 0.0
                         if i == 0:
                             side = -1
                             o = x_fm - x_gt / self._fixed_width - 1 / 2
@@ -205,40 +315,30 @@ class AnchorData:
                         else:
                             side = 0
 
-                        vc = 0.0
-                        vh = 0.0
-                        if iou < 0.5:
-                            text = -1
-                        elif iou > 0.7:
-                            is_positive = True
-                            text = 1
-                            vc = (cy_gt - cy) / ah
-                            vh = math.log(ah_gt / ah)
-                        else:
-                            text = 0
-
+                        text = -1
+                        vc = (cy_gt - cy) / ah
+                        vh = math.log(ah_gt / ah)
                         result = (text, side, vc, vh, o, iou)
-                        if is_positive:
+
+                        if iou > 0.7:
+                            need_max = False
+                            text = 1
+                            result = (text, side, vc, vh, o, iou)
                             if data[(y_fm, int(x_fm), z)][0] != 1:
                                 data[(y_fm, int(x_fm), z)] = result
                             else:
                                 if data[(y_fm, int(x_fm), z)][-1] < iou:
                                     data[(y_fm, int(x_fm), z)] = result
 
-                        if iou > 0.0:
-                            if result_max is None or result[-1] > result_max[-1]:
+                        if need_max and iou > 0.0:
+                            if result_max is None or iou > result_max[-1]:
                                 idx_max = (y_fm, int(x_fm), z)
-                                result_max = result
+                                result_max = (1, *result[1:])
 
                 # idx_max and iou_max is used to find the anchor
                 # with highest iou overlap with a GT box if iou < 0.7.
-                if result_max:
-                    for yi in range(self._height):
-                        for zi in range(self._k):
-                            if data[(yi, int(x_fm), zi)][0] == 1:
-                                break
-                        else:
-                            data[idx_max] = result_max
+                if need_max:
+                    data[idx_max] = result_max
 
         return data
 
@@ -264,7 +364,7 @@ class CTPNLoss(nn.Module):
         self._use_cuda = True
         return super().cuda(device)
 
-    def forward(self, x: torch.Tensor, targets: tuple):
+    def forward(self, input: tuple, targets: tuple):
         def get_choices(h: int, w: int, k: int) -> List[Tuple[int, int, int]]:
             idx_lst = list(range(h * w * k))
             random.shuffle(idx_lst)
@@ -276,7 +376,9 @@ class CTPNLoss(nn.Module):
                 chs.append((yi, xi, zi))
             return chs
 
-        _, h, w, _ = x.shape
+        vc, score, side = input
+        # _, h, w, _ = x.shape
+        _, _, h, w = score.shape
         index, anchors_list = targets
         anchor_data = AnchorData(int(index), anchors_list, h, w)
         choices = get_choices(h, w, self._k)
@@ -299,7 +401,7 @@ class CTPNLoss(nn.Module):
                 break
 
         # print("n_pos = ", n_pos)
-        pos = pos if len(pos) <= n_pos else pos[:n_pos]
+        pos = pos[:n_pos]
         neg = neg[:self._Ns-len(pos)]   # the length of neg is supposed much larger than self._Ns
 
         loss_cls = []
@@ -310,63 +412,60 @@ class CTPNLoss(nn.Module):
             for yi, xi, zi in pos:
                 data = anchor_data.get(yi, xi, zi)
                 # scores
-                start = self._k * 2 + zi * 2
+                start = zi * 2
                 end = start + 2
-                loss_cls.append(self._Ls(x[:, yi, xi, start:end],
+                loss_cls.append(self._Ls(score[:, start:end, yi, xi],
                                          torch.tensor([1]).cuda()))
                 # vertical coordinates
                 start = zi * 2
                 end = start + 2
-                loss_reg_v.append(self._Lv(x[:, yi, xi, start:end],
+                loss_reg_v.append(self._Lv(vc[:, start:end, yi, xi],
                                            torch.tensor([data[2:4]]).float().cuda()))
                 # side-refinement
                 if data[1] != 0:
-                    start = self._k * 4 + zi
+                    start = zi
                     end = start + 1
-                    loss_reg_o.append(self._Lo(x[:, yi, xi, start:end],
+                    loss_reg_o.append(self._Lo(side[:, start:end, yi, xi],
                                                torch.tensor([[data[-2]]]).float().cuda()))
 
             for yi, xi, zi in neg:
                 # scores
-                start = self._k * 2 + zi * 2
+                start = zi * 2
                 end = start + 2
-                loss_cls.append(self._Ls(x[:, yi, xi, start:end],
+                loss_cls.append(self._Ls(score[:, start:end, yi, xi],
                                          torch.tensor([0]).cuda()))
         else:
             for yi, xi, zi in pos:
                 data = anchor_data.get(yi, xi, zi)
                 # scores
-                start = self._k * 2 + zi * 2
+                start = zi * 2
                 end = start + 2
-                loss_cls.append(self._Ls(x[:, yi, xi, start:end],
+                loss_cls.append(self._Ls(score[:, start:end, yi, xi],
                                          torch.tensor([1])))
                 # vertical coordinates
                 start = zi * 2
                 end = start + 2
-                loss_reg_v.append(self._Lv(x[:, yi, xi, start:end],
+                loss_reg_v.append(self._Lv(vc[:, start:end, yi, xi],
                                            torch.tensor([data[2:4]]).float()))
                 # side-refinement
                 if data[1] != 0:
-                    start = self._k * 4 + zi
+                    start = zi
                     end = start + 1
-                    loss_reg_o.append(self._Lo(x[:, yi, xi, start:end],
+                    loss_reg_o.append(self._Lo(side[:, start:end, yi, xi],
                                                torch.tensor([[data[-2]]]).float()))
 
             for yi, xi, zi in neg:
                 # scores
-                start = self._k * 2 + zi * 2
+                start = zi * 2
                 end = start + 2
-                loss_cls.append(self._Ls(x[:, yi, xi, start:end],
+                loss_cls.append(self._Ls(score[:, start:end, yi, xi],
                                          torch.tensor([0])))
 
         loss = sum(loss_cls) / len(loss_cls)
-        # todo loss_reg_v is supposed to be a non-empty list
         if len(loss_reg_v) > 0:
-            loss += sum(loss_reg_v) / len(loss_reg_v)
-        else:
-            print("empty loss_reg_v")
+            loss += self._lambda1 * sum(loss_reg_v) / len(loss_reg_v)
 
         if len(loss_reg_o) > 0:
-            loss += sum(loss_reg_o) / len(loss_reg_o)
+            loss += self._lambda2 * sum(loss_reg_o) / len(loss_reg_o)
 
         return loss
