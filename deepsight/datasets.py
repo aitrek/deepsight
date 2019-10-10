@@ -122,9 +122,9 @@ class GroundTruthFolder(Dataset):
 
 class LabelDataset(SplitDataset):
 
-    def __init__(self, label_path: str, image_path: str):
-        self._label_path = label_path
-        self._image_path = image_path
+    def __init__(self, label_folder: str, image_folder: str):
+        self._label_path = label_folder
+        self._image_path = image_folder
         self.keys = SplitList()
         self.labels = SplitList()
         self._load_data()
