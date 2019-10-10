@@ -1,7 +1,7 @@
 import math
 import cv2
 from typing import Tuple, List
-from ...utils.datasets import GroundTruthFolder, DataList
+from deepsight.datasets import GroundTruthFolder, SplitList
 
 
 def line_func(x1, y1, x2, y2):
@@ -25,7 +25,7 @@ class CTPNFolder(GroundTruthFolder):
     def __init__(self, root: str, fixed_width: int = 16, short_side: int = 600,
                  memorize: bool = True, transformer=None):
         super().__init__(root)
-        self.anchors = DataList
+        self.anchors = SplitList
         self._fixed_width = fixed_width
         self._short_side = short_side
         self._memorize = memorize
