@@ -1,7 +1,7 @@
 """Base class for predict"""
 
 
-class Predictor:
+class Predict:
     """
     Args:
         model: Concrete model.
@@ -13,12 +13,12 @@ class Predictor:
         self._model = model
         self._transform = transform
 
-    def _predict(self, x):
+    def _process(self, x):
         if self._transform:
             x = self._transform(x).unsqueeze(0)
         return self._model(x)
 
-    def predict(self, x):
-        # x = self._predict(x)
+    def process(self, x):
+        # x = self._process(x)
         # ...
         raise NotImplementedError

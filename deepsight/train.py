@@ -3,7 +3,7 @@ import toml
 from torch.utils.tensorboard import SummaryWriter
 
 
-class Trainer:
+class Train:
 
     def __init__(self, log_dir):
         self._writer = SummaryWriter(log_dir)
@@ -12,7 +12,7 @@ class Trainer:
         raise NotImplementedError
 
 
-class DynamicTrainer(Trainer):
+class DynamicTrainer(Train):
     """
     Args:
         config_path (str): Path of the train configuration file which is
