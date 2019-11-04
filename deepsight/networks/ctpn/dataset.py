@@ -152,10 +152,7 @@ class CTPNFolder(GroundTruthFolder):
     def _anchor_ys(self, gt_box: tuple, left: float, right: float):
         x1, y1, x2, y2, x3, y3, x4, y4 = gt_box
 
-        if x1 == x4:
-            y12, y34 = y1, y4
-
-        elif x1 < x4:
+        if x1 <= x4:
             if x4 < x2:
                 if left < x4:
                     if right <= x4:
