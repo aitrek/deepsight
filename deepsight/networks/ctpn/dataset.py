@@ -1,7 +1,7 @@
 import math
 import cv2
 from typing import Tuple, List
-from deepsight.datasets import GroundTruthFolder, SplitList
+from deepsight.dataset import GroundTruthFolder, SplitList
 
 
 def line_func(x1, y1, x2, y2):
