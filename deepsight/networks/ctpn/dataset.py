@@ -110,11 +110,17 @@ class CTPNFolder(GroundTruthFolder):
             List[List[Tuple[pos (int), cy (float), h (float)]]]:
                 pos: The left side position(x-axis) of the anchor box on
                     original image.
-                cy: The center(y-axis) of the anchor box on the input image.
-                h: The height of the anchor box on the input image.
+                cy: The center(y-axis) of the anchor box on the inputs image.
+                h: The height of the anchor box on the inputs image.
         """
         anchors_list = []
         for gt_box in self._convert_gts(index, scale):
+            x1, y1, x2, y2, x3, y3, x4, y4 = gt_box
+            if (x1, y1) == (x2, y2) or (x2, y2) == (x3, y3) \
+                    or (x3, y3) == (x4, y4) or (x4, y4) == (x1, y1):
+                print("skip gt_box: ", gt_box)
+                continue
+
             boxes = self._gt2anchors(gt_box)    # boxes of the same text line
             anchors = []    # anchors of the same text line
             for x1, y1, *_, y4 in boxes:
