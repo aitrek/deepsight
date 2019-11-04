@@ -3,6 +3,8 @@ import cv2
 from typing import Tuple, List
 from deepsight.dataset import GroundTruthFolder, SplitList
 
+THRESHOLD_ANCHOR_HEIGHT_RATIO = 0.7
+
 
 def line_func(x1, y1, x2, y2):
     a = (y1 - y2) / (x1 - x2)
@@ -53,6 +55,7 @@ class CTPNFolder(GroundTruthFolder):
             self._memory[index] = anchors_list
 
         return img, (index, anchors_list)
+        # return img, (index, anchors_list, img_path)
 
     def _get_anchor_heights(self):
         """
@@ -127,6 +130,12 @@ class CTPNFolder(GroundTruthFolder):
                 cy = (y1 + y4) / 2
                 h = float(y4 - y1)
                 anchors.append((x1, cy, h))
+
+            # remove box which is too short
+            avg_h = sum([h for _, _, h in anchors]) / len(anchors)
+            anchors = [anchor for anchor in anchors
+                       if anchor[-1] / avg_h >= THRESHOLD_ANCHOR_HEIGHT_RATIO]
+
             anchors_list.append(anchors)
 
         return anchors_list
