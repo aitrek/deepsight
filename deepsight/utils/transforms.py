@@ -1,6 +1,5 @@
 import cv2
 import numpy as np
-from .image import resize
 
 
 class UnifySize:
@@ -22,12 +21,12 @@ class UnifySize:
         self._height = height
         self._align = align
 
-    def __call__(self, img: np.array) -> np.array:
+    def __call__(self, img: np.ndarray) -> np.ndarray:
         height, width, c = img.shape
         scale = min(self._height / height, self._width / width)
         height = int(height * scale)
         width = int(width * scale)
-        img = resize(img, width=width, height=height)
+        img = cv2.resize(img, (width, height), interpolation=cv2.INTER_NEAREST)
 
         target = np.zeros((self._height, self._width, c), dtype=np.uint8)
         if self._align == "c":
@@ -55,14 +54,14 @@ class ShortSideTransform:
     def __init__(self, short_side: int):
         self._short_side = short_side
 
-    def __call__(self, img: np.array):
+    def __call__(self, img: np.ndarray):
         height, width, _ = img.shape
         scale = self._short_side / min(height, width)
-        resize_height = int(height * scale)
-        resize_width = int(width * scale)
-        resize_img = cv2.resize(img, (resize_width, resize_height),
-                                cv2.INTER_NEAREST)
-        return resize_img
+        resized_height = int(height * scale)
+        resized_width = int(width * scale)
+        resized_img = cv2.resize(img, (resized_width, resized_height),
+                                 cv2.INTER_NEAREST)
+        return resized_img
 
     def __repr__(self):
         return self.__class__.__name__ + '(short_side={0})'.\
