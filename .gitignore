@@ -106,6 +106,7 @@ venv.bak/
 # ide
 .idea
 
-# cache folder
+# folders no need track
 cache
 data
+tools
