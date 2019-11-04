@@ -12,7 +12,7 @@ class Train:
         raise NotImplementedError
 
 
-class DynamicTrainer(Train):
+class DynamicTrain(Train):
     """
     Args:
         config_path (str): Path of the train configuration file which is
