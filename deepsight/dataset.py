@@ -122,18 +122,25 @@ class GroundTruthFolder(Dataset):
 
 class LabelDataset(SplitDataset):
 
-    def __init__(self, label_folder: str, image_folder: str):
+    def __init__(self, label_folder: str, image_folder: str, transformer=None,
+                 cvt_gray: bool = True, label_length: int=None):
         self._label_path = label_folder
         self._image_path = image_folder
+        self._transformer = transformer
+        self._cvt_gray = cvt_gray
+        self._label_length =label_length
         self.keys = SplitList()
         self.labels = SplitList()
         self._load_data()
 
     def __getitem__(self, index: int):
+        label = self.labels[index]
+
         key = self.keys[index]
         img_path = os.path.join(self._image_path, key)
         img = cv2.imread(img_path)
-        label = self.labels[index]
+        if self._transformer is not None:
+            img = self._transformer(img)
 
         return img, label
 
@@ -148,10 +155,14 @@ class LabelDataset(SplitDataset):
             with open(path) as label_file:
                 for line in label_file:
                     try:
-                        key, label = re.split("\s+", line.strip())
+                        key, label = re.split("\s+", line.strip(), maxsplit=1)
                         img_path = os.path.join(self._image_path, key)
                         if not os.path.exists(img_path):
                             continue
+                        if self._label_length and len(label) != label:
+                            label = label.strip()
+                            if len(label) != self._label_length:
+                                continue
                         self.keys.append(key)
                         self.labels.append(label)
                     except:
