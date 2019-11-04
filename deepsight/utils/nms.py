@@ -35,10 +35,10 @@ def nms(boxes: Sequence[BoxType], scores: Sequence[float], threshold: float) -> 
         idx = order[-1]
         picks.append(idx)
 
-        overlap_lefts = np.maximum(lefts[idx], lefts[:-1])
-        overlap_tops = np.maximum(tops[idx], tops[:-1])
-        overlap_rights = np.minimum(rights[idx], rights[:-1])
-        overlap_bottoms = np.minimum(bottoms[idx], bottoms[:-1])
+        overlap_lefts = np.maximum(lefts[idx], lefts[order[:-1]])
+        overlap_tops = np.maximum(tops[idx], tops[order[:-1]])
+        overlap_rights = np.minimum(rights[idx], rights[order[:-1]])
+        overlap_bottoms = np.minimum(bottoms[idx], bottoms[order[:-1]])
 
         ws = np.maximum(0.0, overlap_rights - overlap_lefts + 1)
         hs = np.maximum(0.0, overlap_bottoms - overlap_tops + 1)
