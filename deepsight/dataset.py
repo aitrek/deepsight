@@ -109,8 +109,8 @@ class GroundTruthFolder(Dataset):
                         self.gts.append(boxes)
 
     @staticmethod
-    def _get_boxes(gt_path: str):
-        gt_path += ".gt"
+    def _get_boxes(img_path: str):
+        gt_path = img_path + ".gt"
         boxes = []
         try:
             with open(gt_path) as gt_file:
