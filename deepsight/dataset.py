@@ -103,13 +103,14 @@ class GroundTruthFolder(Dataset):
                 self._load_data(path)
             else:
                 if f.lower().split(".")[-1] in IMG_EXTS:
-                    boxes = self._get_boxes(path + ".gt")
+                    boxes = self._get_boxes(path)
                     if boxes:
                         self.img_paths.append(path)
                         self.gts.append(boxes)
 
     @staticmethod
     def _get_boxes(gt_path: str):
+        gt_path += ".gt"
         boxes = []
         try:
             with open(gt_path) as gt_file:
