@@ -1,7 +1,10 @@
+import os
 import math
 import cv2
 from typing import Tuple, List
 from deepsight.dataset import GroundTruthFolder, SplitList
+import xml.etree.cElementTree as ET
+
 
 THRESHOLD_ANCHOR_HEIGHT_RATIO = 0.7
 
@@ -56,6 +59,77 @@ class CTPNFolder(GroundTruthFolder):
 
         return img, (index, anchors_list)
         # return img, (index, anchors_list, img_path)
+
+    @staticmethod
+    def _get_boxes(img_path: str):
+        """Get box points from PASCAL VOC format xml file
+         created by LabelImg2."""
+        gt_path = ".".join(img_path.split(".")[:-1]) + ".xml"
+        if not os.path.exists(gt_path):
+            return []
+
+        # get object attributes
+        attribs = []
+        for child in ET.parse(gt_path).getroot():
+            attrib = {}
+            tag = child.tag
+            if tag == "object":
+                for elem in child:
+                    if elem.tag == "robndbox":
+                        for attr in elem:
+                            if attr.tag in ["cx", "cy", "w", "h", "angle"]:
+                                attrib[attr.tag] = float(attr.text)
+
+                    elif elem.tag == "bndbox":
+                        attr_vals = {}
+                        for attr in elem:
+                            if attr.tag in ["xmin", "ymin", "xmax", "ymax"]:
+                                attr_vals[attr.tag] = float(attr.text)
+
+                        xmin = attr_vals.get("xmin", 0.0)
+                        xmax = attr_vals.get("xmax", 0.0)
+                        ymin = attr_vals.get("ymin", 0.0)
+                        ymax = attr_vals.get("ymax", 0.0)
+                        angle = attr_vals.get("angle", 0.0)
+                        attrib = {
+                            "cx": xmin + (xmax - xmin) / 2,
+                            "cy": ymin + (ymax - ymin) / 2,
+                            "w": xmax - xmin,
+                            "h": ymax - ymin,
+                            "angle": angle
+                        }
+
+            attribs.append(attrib)
+
+        # transform attributes to text box points
+        boxes = []
+        for attrib in attribs:
+            cx = attrib["cx"]
+            cy = attrib["cy"]
+            w = attrib["w"]
+            h = attrib["h"]
+            angle = -attrib["angle"]    # it seems the angle by labelImg2 is not correct
+
+            hwcos = w * math.cos(angle) / 2
+            hwsin = w * math.sin(angle) / 2
+            hhcos = h * math.cos(angle) / 2
+            hhsin = h * math.sin(angle) / 2
+
+            x1 = math.floor(cx - hwcos - hhsin)
+            y1 = math.floor(cy + hwsin - hhcos)
+
+            x2 = math.ceil(cx + hwcos - hhsin)
+            y2 = math.floor(cy - hwsin - hhcos)
+
+            x3 = math.ceil(cx + hwcos + hhsin)
+            y3 = math.ceil(cy - hwsin + hhcos)
+
+            x4 = math.floor(cx - hwcos + hhsin)
+            y4 = math.ceil(cy + hwsin + hhcos)
+
+            boxes.append([x1, y1, x2, y2, x3, y3, x4, y4])
+
+        return boxes
 
     def _get_anchor_heights(self):
         """
