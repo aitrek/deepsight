@@ -99,7 +99,7 @@ class CTPNFolder(GroundTruthFolder):
                             "angle": angle
                         }
 
-            attribs.append(attrib)
+                attribs.append(attrib)
 
         # transform attributes to text box points
         boxes = []
@@ -234,6 +234,9 @@ class CTPNFolder(GroundTruthFolder):
 
     def _anchor_ys(self, gt_box: tuple, left: float, right: float):
         x1, y1, x2, y2, x3, y3, x4, y4 = gt_box
+
+        if x1 == x4 and x2 == x3 and y1 == y2 and y3 == y4:
+            return y1, y4
 
         if x1 <= x4:
             if x4 < x2:
