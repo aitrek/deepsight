@@ -1,8 +1,10 @@
 import math
+import numpy as np
 from ...predict import Predict
 from .ctpn import ANCHOR_HEIGHTS
 from ...utils.nms import nms
 
+GROUP_DIST_THRESHOLD = 20
 TEXT_NON_TEXT_THRESHOLD = 0.7
 NMS_THRESH = 0.3
 GROUP_MIN_SAMPLES = 3
@@ -24,7 +26,7 @@ class CTPNPredict(Predict):
         groups = self._group_boxes(boxes)
         merged_boxes = self._merge_boxes(groups)
 
-        return merged_boxes
+        return merged_boxes, groups
 
     def _get_boxes(self, inputs, threshold: float, fixed_width: int = 16):
         boxes = []
@@ -45,7 +47,7 @@ class CTPNPredict(Predict):
                         cy = vc * ha + y * fixed_width
                         h = math.exp(vh) * ha
                         left = math.floor(x * fixed_width + (fixed_width - 1) / 2)
-                        right = math.ceil(x * fixed_width + (fixed_width - 1) / 2)
+                        right = math.ceil((x + 1) * fixed_width + (fixed_width - 1) / 2)
                         top = math.floor(cy - h / 2)
                         bottom = math.ceil(cy + h / 2)
                         boxes.append((left, top, right, bottom, score, offset))
@@ -60,8 +62,7 @@ class CTPNPredict(Predict):
             left, top, right, bottom, *_ = box
             for group in groups:
                 g_left, g_top, g_right, g_bottom, *_ = group[-1]
-
-                if left - g_right >= 50:
+                if left - g_right >= GROUP_DIST_THRESHOLD:
                     continue
                 if max(0, min(bottom, g_bottom) - max(top, g_top)) / \
                         (max(bottom, g_bottom) - min(top, g_top)) <= 0.7:
@@ -78,17 +79,46 @@ class CTPNPredict(Predict):
         return groups
 
     def _merge_boxes(self, sorted_groups, fixed_width: int = 16):
+        # todo offset
         merged = []
         for group in sorted_groups:
-            offset_left = group[0][-1] * fixed_width
-            offset_right = group[-1][-1] * fixed_width
+            # left, top, right, bottom, score, offset = group
+            group = np.array(group)
+            lefts = group[:, 0]
+            tops = group[:, 1]
+            rights = group[:, 2]
+            bottoms = group[:, 3]
 
-            left = max(0, min([data[0] for data in group]) - offset_left)
-            top = max(0, min([data[1] for data in group]))
-            right = max([data[2] for data in group]) - offset_right
-            bottom = max([data[3] for data in group])
-            line_box = (left, top, right, bottom)
+            xmin = min(lefts)
+            xmax = max(rights)
 
-            merged.append(line_box)
+            center_xs = lefts + (fixed_width - 1) / 2
+            center_ys = (tops + bottoms) / 2
+
+            poly_center_params = np.polyfit(center_xs, center_ys, 1)    # [k, b]
+            poly_center = np.poly1d(poly_center_params)
+
+            center_ys_hat = poly_center(center_xs)
+            top_gaps = center_ys_hat - tops
+            bottom_gaps = bottoms - center_ys_hat
+
+            max_top_gap = max(top_gaps)
+            max_bottom_gap = max(bottom_gaps)
+
+            poly_top_params = [poly_center_params[0],
+                               poly_center_params[1] + max_top_gap]
+            poly_bottom_params = [poly_center_params[0],
+                                  poly_center_params[1] - max_bottom_gap]
+            poly_top = np.poly1d(poly_top_params)
+            poly_bottom = np.poly1d(poly_bottom_params)
+
+            x1 = x4 = xmin
+            x2 = x3 = xmax
+            y1 = poly_top(x1)
+            y2 = poly_top(x2)
+            y3 = poly_bottom(x3)
+            y4 = poly_bottom(x4)
+
+            merged.append((x1, y1, x2, y2, x3, y3, x4, y4))
 
         return merged
