@@ -90,15 +90,16 @@ class CTPNFolder(GroundTruthFolder):
                         xmax = attr_vals.get("xmax", 0.0)
                         ymin = attr_vals.get("ymin", 0.0)
                         ymax = attr_vals.get("ymax", 0.0)
-                        angle = attr_vals.get("angle", 0.0)
+
                         attrib = {
                             "cx": xmin + (xmax - xmin) / 2,
                             "cy": ymin + (ymax - ymin) / 2,
                             "w": xmax - xmin,
                             "h": ymax - ymin,
-                            "angle": angle
+                            "angle": 0.0
                         }
 
+            if attrib:
                 attribs.append(attrib)
 
         # transform attributes to text box points
@@ -203,12 +204,28 @@ class CTPNFolder(GroundTruthFolder):
             for x1, y1, *_, y4 in boxes:
                 cy = (y1 + y4) / 2
                 h = float(y4 - y1)
+                if h <= 0 or h < 1:
+                    continue
+
                 anchors.append((x1, cy, h))
 
-            # remove box which is too short
+            if not anchors:
+                continue
+
+            # remove boxes which is too short at leftside or rightside
             avg_h = sum([h for _, _, h in anchors]) / len(anchors)
-            anchors = [anchor for anchor in anchors
-                       if anchor[-1] / avg_h >= THRESHOLD_ANCHOR_HEIGHT_RATIO]
+            start, end = 0, len(anchors)
+            for i, anchor in enumerate(anchors):
+                if anchor[-1] / avg_h >= THRESHOLD_ANCHOR_HEIGHT_RATIO:
+                    start = i
+                    break
+            for i, anchor in enumerate(reversed(anchors)):
+                if anchor[-1] / avg_h >= THRESHOLD_ANCHOR_HEIGHT_RATIO:
+                    end = len(anchors) - i
+                    break
+            if start >= end:
+                continue
+            anchors = anchors[start:end]
 
             anchors_list.append(anchors)
 
@@ -224,10 +241,13 @@ class CTPNFolder(GroundTruthFolder):
             left = xmin + i * self._fixed_width
             right = left + self._fixed_width - 1
             y12, y34 = self._anchor_ys(gt_box, left, right)
-            x1 = x4 = math.floor(left)
+            # x1 = x4 = math.floor(left)
+            x1 = x4 = left
             x2 = x3 = x1 + self._fixed_width - 1
-            y1 = y2 = math.floor(y12)
-            y3 = y4 = math.ceil(y34)
+            # y1 = y2 = math.floor(y12)
+            y1 = y2 = y12
+            # y3 = y4 = math.ceil(y34)
+            y3 = y4 = y34
             anchors.append((x1, y1, x2, y2, x3, y3, x4, y4))
 
         return anchors
