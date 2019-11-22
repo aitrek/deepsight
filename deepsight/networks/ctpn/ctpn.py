@@ -1,11 +1,10 @@
 """Connectionist Text Proposal Network"""
-import math
 import torch.nn as nn
 import torchvision.models as models
 import torchvision.transforms as transforms
 import torch.nn.functional as F
-from typing import Tuple, List
-from ...utils.transforms import ShortSideTransform
+from typing import Tuple
+from .transform import ShortSideTransform
 
 
 ctpn_transformer = transforms.Compose(
