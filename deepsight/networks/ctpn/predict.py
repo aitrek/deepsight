@@ -102,13 +102,14 @@ class CTPNPredict(Predict):
             top_gaps = center_ys_hat - tops
             bottom_gaps = bottoms - center_ys_hat
 
-            max_top_gap = max(top_gaps)
-            max_bottom_gap = max(bottom_gaps)
+            avg_top_gap = np.mean(top_gaps)
+            avg_bottom_gap = np.mean(bottom_gaps)
 
             poly_top_params = [poly_center_params[0],
-                               poly_center_params[1] + max_top_gap]
+                               poly_center_params[1] + avg_top_gap]
             poly_bottom_params = [poly_center_params[0],
-                                  poly_center_params[1] - max_bottom_gap]
+                                  poly_center_params[1] - avg_bottom_gap]
+
             poly_top = np.poly1d(poly_top_params)
             poly_bottom = np.poly1d(poly_bottom_params)
 
