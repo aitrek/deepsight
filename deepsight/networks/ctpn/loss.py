@@ -76,13 +76,13 @@ class AnchorData:
                 # variable with "_fm" means on feature maps, otherwise on image.
                 x_gt, cy_gt, ah_gt = anchor
                 x_fm = x_gt // self._fixed_width
-                if x_fm >= self._width:
+                if x_fm < 0 or x_fm >= self._width:
                     continue
 
                 for y_fm in range(self._height):
                     for z, ah in enumerate(ANCHOR_HEIGHTS):
-                        cy = y_fm * self._fixed_width
-                        iou = cal_iou(cy, ah, cy_gt, ah_gt)
+                        cy_a = y_fm * self._fixed_width
+                        iou = cal_iou(cy_a, ah, cy_gt, ah_gt)
 
                         # the side-refinement offset is changed to be the gap
                         # between left/right side to the x_min of left/rightmost
@@ -98,7 +98,7 @@ class AnchorData:
                             o = 0.0
 
                         text = -1
-                        vc = (cy_gt - cy) / ah
+                        vc = (cy_gt - cy_a) / ah
                         vh = math.log(ah_gt / ah)
                         result = (text, side, vc, vh, o, iou)
 
